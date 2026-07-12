@@ -1,9 +1,9 @@
-# ---------------------------------------------------  #
 ### AMD SPECIFIC INFO ###
 The official support is problematic with AMD gpu's atm. It uses either "eager" or "triton" (you can enable this with `--enable-triton-backend` startup parameter on comfyui). Eager doesn't work for RDNA2 unless a patch is made (works for rdna4 at least dunno about rdna3) and same situation with triton backend. And even if you make them work , the performance is worse compared to using this node. Also, the `convert_comfy_quant script.py` works and you can also use models made with that in this node as well, so for AMD in short, use this node to quantize and load and use the models. You can convert those to comfy native compatible format to be able to use in both ways. 
 
 Long story short, at least for AMD this is still relevant until they fix the performance in the comfyui-kitchen for us. (doubt)
 
+* the int4 branch has int4 model loading available every model I've tried works, except there is no lora support atm.
 * int8 clip saving now available
 
 <img width="550" height="166" alt="image" src="https://github.com/user-attachments/assets/c6bf6dd4-e8f2-4a86-8b33-8900d1e2a781" />
@@ -12,8 +12,7 @@ Move the converted clip into models\clip ; it can be loaded via the same "Load C
 
 * int8 clip support added
 * As of latest patch, models converted and saved with this node would work with both comfyui & this (and bob's original) node.
-#  ---------------------------------------------------  #
--
+
 -
 -
 -
