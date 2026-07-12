@@ -87,6 +87,7 @@ try:
     from .int8_save import INT8ModelSave
     from .int8_clip_loader import CLIPLoaderINT8, DualCLIPLoaderINT8
     from .int8_clip_save import INT8CLIPSave
+    from .int4_unet_loader import UNetLoaderINT4ConvRot
     
     NODE_CLASS_MAPPINGS = {
         "OTUNetLoaderW8A8": UNetLoaderINTW8A8,
@@ -96,6 +97,7 @@ try:
         "CLIPLoaderINT8": CLIPLoaderINT8,
         "DualCLIPLoaderINT8": DualCLIPLoaderINT8,
         "INT8CLIPSave": INT8CLIPSave,
+        "UNetLoaderINT4ConvRot": UNetLoaderINT4ConvRot,
     }
 
     NODE_DISPLAY_NAME_MAPPINGS = {
@@ -106,6 +108,7 @@ try:
         "CLIPLoaderINT8": "Load CLIP INT8 (W8A8)",
         "DualCLIPLoaderINT8": "Load Dual CLIP INT8 (W8A8)",
         "INT8CLIPSave": "Save Int8 CLIP",
+        "UNetLoaderINT4ConvRot": "Load Diffusion Model INT4 ConvRot (W4A4, eager)",
     }
 except ImportError as e:
     logging.error(f"Int88: Failed to import nodes: {e}")
