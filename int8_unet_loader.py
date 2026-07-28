@@ -39,7 +39,7 @@ class UNetLoaderINTW8A8:
             "required": {
                 "unet_name": (folder_paths.get_filename_list("diffusion_models"),),
                 "weight_dtype": (["default", "fp16", "bf16", "fp32"], {"tooltip": "INT8 compute dtype. Default follows the model dtype, but uses fp16 for RTX 20/T4 sm75 GPUs and fp32 for GTX 16/unknown sm75 GPUs. Manual values force that dtype."}),
-                "model_type": (["flux2", "z-image", "ideogram4", "chroma", "krea2", "wan", "ltx2", "qwen", "ernie", "anima", "hidream o1", "boogu"], {"tooltip": "Only used for on the fly quantization, to filter sensitive layers."}),
+                "model_type": (["flux2", "z-image", "ideogram4", "chroma", "krea2", "wan", "ltx2", "qwen", "ernie", "anima", "hidream o1", "boogu", "trellis2"], {"tooltip": "Only used for on the fly quantization, to filter sensitive layers."}),
                 "on_the_fly_quantization": ("BOOLEAN", {"default": False, "tooltip": "Quantize a higher precision model to INT8. If the selected model is already INT8 keep unchecked."}),
                 "enable_convrot": ("BOOLEAN", {"default": True, "tooltip": "Enable ConvRot for better quantization. ~1.1x slower, but near-GGUF_Q8 quality."}),
                 "lora_mode": (["None", "Stochastic", "Dynamic"], {"default": "None", "tooltip": "None bakes LoRA patches with normal rounding which is the default behavior. Stochastic bakes with stochastic INT8 rounding, which can occasionally be closer to the BF16+lora baseline. Dynamic applies LoRA at inference time, which is slow and only works for conventional lora."}),
@@ -152,6 +152,10 @@ class UNetLoaderINTW8A8:
             Int8TensorwiseOps.excluded_names = [
                 'adaln', 'embedding', 'patchify', 'to_gate_logits', 'proj_out', 'model.audio', 'model.video', 'model.av', 'model.patch', 'model.proj', 'shift', #'transformer_blocks.0.', 'transformer_blocks.46.', # 'transformer_blocks.1.', 'transformer_blocks.47.',
             ]
+        elif model_type == "trellis2":
+            Int8TensorwiseOps.excluded_names = [
+                'input_layer', 'out_layer', 't_embedder', 'rope',
+            ]
 
         # Load state dict once to detect model and prepare LoRA
         sd, metadata = comfy.utils.load_torch_file(unet_path, return_metadata=True)
@@ -230,6 +234,13 @@ class UNetLoaderINTW8A8:
         try:
             Int8TensorwiseOps.applied_lora_patches = set()
             model = comfy.sd.load_diffusion_model_state_dict(sd, model_options=model_options, metadata=metadata, disable_dynamic=disable_dynamic)
+            if model is None:
+                raise RuntimeError(
+                    f"INT8 Fast: ComfyUI could not detect a model architecture for '{unet_name}'. "
+                    "This usually means the checkpoint's architecture isn't registered in "
+                    "comfy.model_detection yet (e.g. a model that hasn't landed native ComfyUI "
+                    "support), or the file isn't a supported diffusion-model state dict at all."
+                )
             
             # Print unmatched keys to help with debugging
             if Int8TensorwiseOps.lora_patches:
