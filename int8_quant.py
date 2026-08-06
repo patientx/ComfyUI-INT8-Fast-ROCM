@@ -15,7 +15,6 @@ try:
 except Exception:
     _AIMDO_FILE_SLICE_LOAD = False
 
-# Add this at the top of your file
 try:
     from .int8_fused_kernel import triton_int8_linear
     from .int8_fused_kernel import triton_int8_linear_per_row
@@ -424,7 +423,6 @@ if _COMFY_OPS_AVAILABLE:
                             self._w4a8_codebook = codebook
                             self._w4a8_s_channel = s_channel
                             self._w4a8_s_rel = s_rel
-                            self._w4a8_dequant_cache = None  # (device, int8_weight, weight_scale)
                             self.weight = nn.Parameter(weight_tensor, requires_grad=False)
                             self._is_quantized = True
                             self._is_per_row = True
@@ -679,20 +677,14 @@ if _COMFY_OPS_AVAILABLE:
                         bias = bias.to(x.device, non_blocking=True)    
                 
                 if getattr(self, "_is_w4a8", False):
-                    cache = self._w4a8_dequant_cache
-                    if cache is None or cache[0] != weight.device:
-                        codebook = self._w4a8_codebook.to(weight.device, non_blocking=True)
-                        s_channel = self._w4a8_s_channel.to(weight.device, non_blocking=True)
-                        s_rel = self._w4a8_s_rel.to(weight.device, non_blocking=True)
-                        dequant_float = dequant_asym_w4a8_to_float(
-                            weight, codebook, s_channel, s_rel, self._w4a8_group_size
-                        )
-                        w_int8, w_scale_computed = quantize_int8_axiswise(dequant_float, dim=1)
-                        del dequant_float
-                        self._w4a8_dequant_cache = (weight.device, w_int8, w_scale_computed)
-                        cache = self._w4a8_dequant_cache
-                    weight = cache[1]
-                    w_scale = cache[2]
+                    codebook = self._w4a8_codebook.to(weight.device, non_blocking=True)
+                    s_channel = self._w4a8_s_channel.to(weight.device, non_blocking=True)
+                    s_rel = self._w4a8_s_rel.to(weight.device, non_blocking=True)
+                    dequant_float = dequant_asym_w4a8_to_float(
+                        weight, codebook, s_channel, s_rel, self._w4a8_group_size
+                    )
+                    weight, w_scale = quantize_int8_axiswise(dequant_float, dim=1)
+                    del dequant_float
                 else:
                     w_scale = self._get_weight_scale()
                     if isinstance(w_scale, torch.Tensor) and w_scale.device != x.device:
