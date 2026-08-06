@@ -339,7 +339,7 @@ def triton_int8_linear_per_row(x: torch.Tensor, weight: torch.Tensor, weight_sca
     N = weight.shape[0]
 
     # 2. Dynamic Activation Quantization
-    x_int8, x_scale = triton_quantize_rowwise(x_2d)
+    x_int8, x_scale = triton_quantize_rowwise(x_2d.float())
 
     # 3. Allocate Output
     output = torch.empty((M, N), device=x.device, dtype=compute_dtype)
