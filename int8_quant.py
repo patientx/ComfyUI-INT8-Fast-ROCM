@@ -25,6 +25,12 @@ except ImportError:
     _TRITON_AVAILABLE = False
     print("Triton not found, falling back to torch._int_mm")
 
+try:
+    from .w4a8_int8 import dequant_asym_w4a8_to_float, bridge_w4a8_metadata_to_comfy_quant
+    _W4A8_AVAILABLE = True
+except ImportError:
+    _W4A8_AVAILABLE = False
+
 # Runtime toggle — set by Int8TensorwiseOps.use_triton via the loader node
 _use_triton = True
 
@@ -384,6 +390,7 @@ if _COMFY_OPS_AVAILABLE:
                 _ = state_dict.pop(input_scale_key, None)
                 
                 quant_conf_parsed = None
+                w4a8_handled = False
                 if comfy_quant_tensor is not None:
                     try:
                         import json
@@ -397,6 +404,39 @@ if _COMFY_OPS_AVAILABLE:
                     except Exception:
                         pass
                 
+                if quant_conf_parsed and quant_conf_parsed.get("format") == "asym_w4a8_int8":
+                    if not _W4A8_AVAILABLE:
+                        raise ImportError("w4a8_int8.py not found next to int8_quant.py")
+                    if weight_tensor is None or weight_tensor.dtype != torch.int8:
+                        logging.warning(f"W4A8: {weight_key} missing packed int8 weight, skipping")
+                    else:
+                        codebook = pop_metadata(state_dict, prefix, "weight_codebook")
+                        s_channel = pop_metadata(state_dict, prefix, "weight_s_channel")
+                        s_rel = pop_metadata(state_dict, prefix, "weight_s_rel")
+                        if codebook is None or s_channel is None or s_rel is None:
+                            logging.warning(f"W4A8: {weight_key} missing codebook/s_channel/s_rel, skipping")
+                        else:
+                            # Lazy load: keep everything packed/compact at load time (cheap,
+                            # matches INT4 ConvRot's pattern). Dequant happens once per device
+                            # on first forward(), on GPU, and is cached from then on.
+                            self._is_w4a8 = True
+                            self._w4a8_group_size = int(quant_conf_parsed.get("group_size", 16))
+                            self._w4a8_codebook = codebook
+                            self._w4a8_s_channel = s_channel
+                            self._w4a8_s_rel = s_rel
+                            self._w4a8_dequant_cache = None  # (device, int8_weight, weight_scale)
+                            self.weight = nn.Parameter(weight_tensor, requires_grad=False)
+                            self._is_quantized = True
+                            self._is_per_row = True
+                            Int8TensorwiseOps._is_prequantized = True
+                            logging.debug(
+                                f"W4A8 (lazy) Loaded: {weight_key} packed {tuple(weight_tensor.shape)} "
+                                f"group_size={self._w4a8_group_size}"
+                            )
+                            Int8TensorwiseOps._w4a8_layer_count = getattr(Int8TensorwiseOps, "_w4a8_layer_count", 0) + 1
+                            w4a8_handled = True
+                            weight_tensor = None  # handled -- skip generic weight assignment below
+
                 pending_weight_lora_patches = None
                 if weight_tensor is not None and weight_tensor.dtype != torch.int8:
                     pending_weight_lora_patches = Int8TensorwiseOps.lora_patches.get(normalize_key(weight_key))
@@ -492,7 +532,6 @@ if _COMFY_OPS_AVAILABLE:
                             self._use_convrot = False
                             if getattr(Int8TensorwiseOps, "enable_convrot", False) and self.in_features % CONVROT_GROUP_SIZE == 0:
                                 try:
-                                    import logging
                                     from .convrot import build_hadamard, rotate_weight
                                     H = build_hadamard(CONVROT_GROUP_SIZE, device=w_gpu.device, dtype=w_gpu.dtype)
                                     w_gpu = rotate_weight(w_gpu, H, group_size=CONVROT_GROUP_SIZE)
@@ -502,7 +541,6 @@ if _COMFY_OPS_AVAILABLE:
                                     # (instead of relying on the loader's default).
                                     self._convrot_groupsize = CONVROT_GROUP_SIZE
                                 except ImportError as e:
-                                    import logging
                                     logging.warning(f"INT8 Fast: ConvRot enabled but convrot module error: {e}")
                                     
                             q_weight, q_scale = quantize_int8_axiswise(w_gpu, dim=1)
@@ -519,7 +557,7 @@ if _COMFY_OPS_AVAILABLE:
                     else:
                         self._is_quantized = False
                         self.weight = nn.Parameter(source_tensor(weight_tensor), requires_grad=False)
-                else:
+                elif not w4a8_handled:
                     missing_keys.append(weight_key)
                 
                 # Assign bias if it exists (already patched if needed)
@@ -640,9 +678,25 @@ if _COMFY_OPS_AVAILABLE:
                     if bias is not None and bias.device != x.device:
                         bias = bias.to(x.device, non_blocking=True)    
                 
-                w_scale = self._get_weight_scale()
-                if isinstance(w_scale, torch.Tensor) and w_scale.device != x.device:
-                    w_scale = w_scale.to(x.device, non_blocking=True)
+                if getattr(self, "_is_w4a8", False):
+                    cache = self._w4a8_dequant_cache
+                    if cache is None or cache[0] != weight.device:
+                        codebook = self._w4a8_codebook.to(weight.device, non_blocking=True)
+                        s_channel = self._w4a8_s_channel.to(weight.device, non_blocking=True)
+                        s_rel = self._w4a8_s_rel.to(weight.device, non_blocking=True)
+                        dequant_float = dequant_asym_w4a8_to_float(
+                            weight, codebook, s_channel, s_rel, self._w4a8_group_size
+                        )
+                        w_int8, w_scale_computed = quantize_int8_axiswise(dequant_float, dim=1)
+                        del dequant_float
+                        self._w4a8_dequant_cache = (weight.device, w_int8, w_scale_computed)
+                        cache = self._w4a8_dequant_cache
+                    weight = cache[1]
+                    w_scale = cache[2]
+                else:
+                    w_scale = self._get_weight_scale()
+                    if isinstance(w_scale, torch.Tensor) and w_scale.device != x.device:
+                        w_scale = w_scale.to(x.device, non_blocking=True)
                 
                 compute_dtype = Int8TensorwiseOps.compute_dtype
                 if compute_dtype is None:
