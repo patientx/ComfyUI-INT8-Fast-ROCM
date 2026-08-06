@@ -5,6 +5,7 @@ Long story short, at least for AMD this is still relevant until they fix the per
 
 ((( This node requires triton package on linux or triton-windows (pip install triton-windows) on windows 10-11. )))
 
+* int4-a4w8 quantized model loading + generation speed improved, DESPITE IT BEING AN INT4 , LOAD THIS WITH INT8 LOADER
 * initial int4-a4w8 support (https://huggingface.co/Kijai/MiniMax-H3-experimental/blob/main/minimax_h3_fl2va_pruned_w4a8_mixed.safetensors)
 * if you get "NaN" or basically black output with a model try forcing weight type to fp32 or bf16.
 * int4 model loading support. Works with comfyui's example krea2 model, models made with [Starnodes-ModelConverter](https://github.com/Starnodes2024/comfyui-starnodes-modelconverter) and a few other's I came across. Partial lora support. On ltxvideo same error as int8 persist, couldn't solve for now.(no lora support there) On other int4 models USE 2X OR MORE LORA STRENGTH you would use normally with int8 or other models.
