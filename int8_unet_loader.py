@@ -159,6 +159,12 @@ class UNetLoaderINTW8A8:
 
         # Load state dict once to detect model and prepare LoRA
         sd, metadata = comfy.utils.load_torch_file(unet_path, return_metadata=True)
+
+        try:
+            from .w4a8_int8 import bridge_w4a8_metadata_to_comfy_quant
+            bridge_w4a8_metadata_to_comfy_quant(sd, metadata)
+        except ImportError:
+            pass
         
         # Pre-load LoRA if selected to bake it during quantization
         Int8TensorwiseOps.lora_patches = {}
