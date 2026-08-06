@@ -19,8 +19,8 @@ Move the converted clip into models\clip ; it can be loaded via the same "Load C
 * int8 clip support added
 * As of latest patch, models converted and saved with this node would work with both comfyui & this (and bob's original) node.
 
-::::: ORIGINAL README ::::
-
+<details>
+<summary><strong> * Original README * </strong> </summary>
 # 🎉 INT8 is now officially supported in ComfyUI 🎉
 https://github.com/Comfy-Org/ComfyUI/commit/1a510f04234e5a213d3985a1a54f65652623f4bc
 
@@ -139,3 +139,4 @@ https://github.com/silveroxides/convert_to_quant
 https://github.com/silveroxides/ComfyUI-QuantOps
 
 ## The unholy trinity of AI slopsters I used to glue all this together over the course of multiple months now
+</details>
