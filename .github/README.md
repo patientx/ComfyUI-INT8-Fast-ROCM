@@ -5,6 +5,19 @@ Long story short, at least for AMD this is still relevant until they fix the per
 
 ((( This node requires triton package on linux or triton-windows (pip install triton-windows) on windows 10-11. )))
 
+* IMPORTANT "ROCm INT8 compatibility patch"
+
+ComfyUI ships a component (comfy-kitchen) that provides fast INT8-quantized model support. It works great on Nvidia GPUs and on newer AMD GPUs (RDNA3/RDNA4), but on RDNA2 cards (RX 6800/6900 series and similar) and older AMD hardware, its INT8 math path relies on a GPU library feature that isn't implemented for that hardware. The practical result: any INT8-quantized model or VAE (including things like MiniMax-H3's INT8 VAE) fails to load with a HIPBLAS_STATUS_INVALID_VALUE error, even though the rest of the model works fine.
+
+This node pack fixes that by swapping in its own INT8 math kernel — the same one this pack already uses for its INT8 UNet loaders — as a replacement for just that one broken piece. Everything else (loading the model, applying quantization scales, rotation-based quantization, etc.) still runs exactly as ComfyUI normally does it; only the actual GPU multiplication step gets rerouted to hardware that supports it.
+
+This happens automatically in the background as soon as the node pack loads — there's nothing to configure. It detects your GPU and only steps in on hardware known to have the broken path; on Nvidia and on RDNA3/RDNA4 AMD cards it stays out of the way entirely and lets ComfyUI use its normal, native path, which is expected to be faster and better-tested there.
+
+If you ever need to override this behavior — say, a newer or older card behaves unexpectedly — set the environment variable ROCM_INT8_KITCHEN_PATCH before launching ComfyUI:
+
+ROCM_INT8_KITCHEN_PATCH=off — never apply the patch
+ROCM_INT8_KITCHEN_PATCH=force — always apply it, regardless of detected GPU
+
 * int4-a4w8 quantized model loading + generation speed improved, DESPITE IT BEING AN INT4 , LOAD THIS WITH INT8 LOADER
 * initial int4-a4w8 support (https://huggingface.co/Kijai/MiniMax-H3-experimental/blob/main/minimax_h3_fl2va_pruned_w4a8_mixed.safetensors)
 * if you get "NaN" or basically black output with a model try forcing weight type to fp32 or bf16.
