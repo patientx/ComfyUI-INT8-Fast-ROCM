@@ -11,6 +11,8 @@ Uses torch._int_mm for fast inference.
 import logging
 import torch
 
+from . import rocm_int8_kitchen_patch 
+
 # =============================================================================
 # Layout Registration
 # =============================================================================
