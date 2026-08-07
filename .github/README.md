@@ -2,7 +2,7 @@
 
 ((( This node requires triton package on linux or triton-windows (pip install triton-windows) on windows 10-11. )))
 
-* int4-a4w8 support added via kitchen hijacker. now can use these special int4 quants from Kijai [https://huggingface.co/Kijai/MiniMax-H3-experimental/blob/main/minimax_h3_fl2va_pruned_w4a8_mixed.safetensors](https://huggingface.co/Kijai/MiniMax-H3-experimental) even with full lora support, just like int8 models. 
+* int4-a4w8 support added via kitchen hijacker. now can use these special int4 quants from Kijai https://huggingface.co/Kijai/MiniMax-H3-experimental even with full lora support, just like int8 models. 
 
 * IMPORTANT "ROCm INT8 compatibility patch"
 
