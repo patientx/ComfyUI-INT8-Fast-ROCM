@@ -2,6 +2,8 @@
 
 ((( This node requires triton package on linux or triton-windows (pip install triton-windows) on windows 10-11. )))
 
+* int4-a4w8 support added via kitchen hijacker. now can use these special int4 quants from Kijai [https://huggingface.co/Kijai/MiniMax-H3-experimental/blob/main/minimax_h3_fl2va_pruned_w4a8_mixed.safetensors](https://huggingface.co/Kijai/MiniMax-H3-experimental) even with full lora support, just like int8 models. 
+
 * IMPORTANT "ROCm INT8 compatibility patch"
 
 ComfyUI ships a component (comfy-kitchen) that provides fast INT8-quantized model support. It works great on Nvidia GPUs and on newer AMD GPUs (RDNA3/RDNA4), but on RDNA2 cards (RX 6800/6900 series and similar) and older AMD hardware, its INT8 math path relies on a GPU library feature that isn't implemented for that hardware. The practical result: any INT8-quantized model or VAE (including things like MiniMax-H3's INT8 VAE) fails to load with a HIPBLAS_STATUS_INVALID_VALUE error, even though the rest of the model works fine.
