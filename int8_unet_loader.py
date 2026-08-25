@@ -39,7 +39,7 @@ class UNetLoaderINTW8A8:
             "required": {
                 "unet_name": (folder_paths.get_filename_list("diffusion_models"),),
                 "weight_dtype": (["default", "fp16", "bf16", "fp32"], {"tooltip": "INT8 compute dtype. Default follows the model dtype, but uses fp16 for RTX 20/T4 sm75 GPUs and fp32 for GTX 16/unknown sm75 GPUs. Manual values force that dtype."}),
-                "model_type": (["flux2", "z-image", "ideogram4", "chroma", "krea2", "wan", "ltx2", "qwen", "ernie", "anima", "hidream o1", "boogu", "trellis2"], {"tooltip": "Only used for on the fly quantization, to filter sensitive layers."}),
+				"model_type": (["flux2", "z-image", "ideogram4", "chroma", "krea2", "wan", "ltx2", "qwen", "ernie", "anima", "hidream o1", "boogu", "trellis2", "minimax h3", "minimax h3 skip edges"], {"tooltip": "Only used for on the fly quantization, to filter sensitive layers."}),
                 "on_the_fly_quantization": ("BOOLEAN", {"default": False, "tooltip": "Quantize a higher precision model to INT8. If the selected model is already INT8 keep unchecked."}),
                 "enable_convrot": ("BOOLEAN", {"default": True, "tooltip": "Enable ConvRot for better quantization. ~1.1x slower, but near-GGUF_Q8 quality."}),
                 "lora_mode": (["None", "Stochastic", "Dynamic"], {"default": "None", "tooltip": "None bakes LoRA patches with normal rounding which is the default behavior. Stochastic bakes with stochastic INT8 rounding, which can occasionally be closer to the BF16+lora baseline. Dynamic applies LoRA at inference time, which is slow and only works for conventional lora."}),
@@ -156,6 +156,25 @@ class UNetLoaderINTW8A8:
             Int8TensorwiseOps.excluded_names = [
                 'input_layer', 'out_layer', 't_embedder', 'rope',
             ]
+			
+        elif model_type == "minimax h3":
+            # Credit: plz12345, upstream PR #99
+            # (https://github.com/BobJohnson24/ComfyUI-INT8-Fast/pull/99)
+            # Without these exclusions adaln_proj (in_features 8),
+            # video_patch_proj (96) and audio_patch_proj (32) get quantized
+            # with no rotation, since ConvRot needs in_features % 256 == 0.
+            Int8TensorwiseOps.excluded_names = [
+                'token_refiner', 'adaln', 'patch_proj', 'condition_proj', 'final_layer',
+            ]
+        elif model_type == "minimax h3 skip edges":
+            # Credit: plz12345, upstream PR #99
+            # (https://github.com/BobJohnson24/ComfyUI-INT8-Fast/pull/99)
+            # As above, plus the first/last two transformer blocks kept in
+            # BF16, matching the _skip_edges builds on HF.
+            Int8TensorwiseOps.excluded_names = [
+                'token_refiner', 'adaln', 'patch_proj', 'condition_proj', 'final_layer',
+                'blocks.0.', 'blocks.1.', 'blocks.48.', 'blocks.49.',
+            ]						
 
         # Load state dict once to detect model and prepare LoRA
         sd, metadata = comfy.utils.load_torch_file(unet_path, return_metadata=True)
@@ -346,5 +365,3 @@ class PreLoraLoader:
                 break
                 
         return (loras,)
-
-
