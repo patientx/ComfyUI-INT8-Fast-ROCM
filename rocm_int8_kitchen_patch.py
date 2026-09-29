@@ -121,16 +121,12 @@ def rocm_int8_linear(
     convrot_groupsize: int = 256,
     input_act: str | None = None,
     input_act_weight: torch.Tensor | None = None,
-    **_unused_kwargs,
+    input_act_eps: float = 0.0,
+    residual: torch.Tensor | None = None,
+    residual_scale: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    # Step 1: input activation function, same as kitchen.
-    # Newer comfy_kitchen passes input_act_weight for parametrized
-    # activations fused into the ConvRot quantizer load. Forward it if the
-    # installed _apply_input_act accepts it, fall back if not.
-    try:
-        x = ck_quant._apply_input_act(x, input_act, input_act_weight)
-    except TypeError:
-        x = ck_quant._apply_input_act(x, input_act)
+    # Step 1: input activation function, same as kitchen (incl. rms_norm weight/eps).
+    x = ck_quant._apply_input_act(x, input_act, input_act_weight, input_act_eps)
 
     if x.shape[-1] != weight.shape[-1]:
         raise ValueError(
@@ -161,13 +157,16 @@ def rocm_int8_linear(
     # Dispatch to the per-row kernel if weight_scale is per-output-channel,
     # otherwise the scalar (tensorwise) kernel.
     if weight_scale.numel() == 1:
-        return triton_int8_linear(
+        out = triton_int8_linear(
             x, weight, weight_scale, bias=bias, compute_dtype=out_dtype
         )
     else:
-        return triton_int8_linear_per_row(
+        out = triton_int8_linear_per_row(
             x, weight, weight_scale, bias=bias, compute_dtype=out_dtype
         )
+
+    # Step 9: residual form, residual + residual_scale * linear(x), same as kitchen.
+    return ck_quant._apply_residual(out, residual, residual_scale)
 
 
 def _patched_get_implementation(name, *args, **kwargs):
