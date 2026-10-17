@@ -100,11 +100,11 @@ except ImportError:
 
 try:
     # Normal case: loaded as part of the custom_nodes package by ComfyUI
-    from .int8_fused_kernel import triton_int8_linear, triton_int8_linear_per_row
+    from .int8_fused_kernel import triton_int8_linear, triton_int8_linear_per_row, triton_situ
 except ImportError:
     # Standalone case: script run directly for testing, with this file's
     # own folder added to sys.path (no relative package context available)
-    from int8_fused_kernel import triton_int8_linear, triton_int8_linear_per_row
+    from int8_fused_kernel import triton_int8_linear, triton_int8_linear_per_row, triton_situ
 
 log = logging.getLogger("comfyui-int8-fast-rocm")
 
@@ -125,6 +125,13 @@ def rocm_int8_linear(
     residual: torch.Tensor | None = None,
     residual_scale: torch.Tensor | None = None,
 ) -> torch.Tensor:
+    # "situ" (MOSS-Image, comfy-kitchen PR #251): single-pass Triton situ ([hidden | gate] -> K wide),
+    # then the normal path below (rotation matmul + quantize + GEMM). Works on kitchen builds that
+    # don't know "situ". The rotation stays a regular matmul: a fused Triton rotation was slower on RDNA2.
+    if input_act == "situ":
+        x = triton_situ(x)
+        input_act = None
+
     # Step 1: input activation function, same as kitchen (incl. rms_norm weight/eps).
     x = ck_quant._apply_input_act(x, input_act, input_act_weight, input_act_eps)
 
