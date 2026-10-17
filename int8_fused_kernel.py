@@ -1,6 +1,19 @@
+import os
 import torch
 import triton
 import triton.language as tl
+
+# Set ROCM_INT8_AUTOTUNE=1 to re-enable full autotuning (per-M retune). Default: fixed config.
+# Fixed config = single winner measured on RDNA2; Triton skips benchmarking with one config.
+_ALL_CONFIGS = [
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
+    triton.Config({'BLOCK_M': 64,  'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64,  'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 64,  'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32,  'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
+]
+_AUTOTUNE_CONFIGS = _ALL_CONFIGS if os.environ.get("ROCM_INT8_AUTOTUNE", "0") == "1" else _ALL_CONFIGS[:1]
 
 # =============================================================================
 # Kernel 1: Fused Row-wise Quantization (FP16/BF16 -> INT8 + Scale)
@@ -77,14 +90,7 @@ def triton_quantize_rowwise(x: torch.Tensor):
 # =============================================================================
 
 @triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
-        triton.Config({'BLOCK_M': 64,  'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64,  'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64,  'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32,  'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-    ],
+    configs=_AUTOTUNE_CONFIGS,
     key=['M', 'N', 'K'],
 )
 @triton.jit
@@ -175,20 +181,24 @@ def _int8_matmul_dequant_kernel(
 # Python Wrapper
 # =============================================================================
 
-def triton_int8_linear(x: torch.Tensor, weight: torch.Tensor, weight_scale, bias=None, compute_dtype=torch.float16):
+def triton_int8_linear(x: torch.Tensor, weight: torch.Tensor, weight_scale, bias=None, compute_dtype=torch.float16,
+                       x_q=None):
     """
     Fused pipeline for W8A8 Linear Layer.
+    x_q: optional (x_int8 [M, K], x_scale [M, 1]) already-quantized activation; x only supplies shape/device.
     """
     # 1. Flatten inputs if 3D [Batch, Tokens, Dim] -> [Batch*Tokens, Dim]
     x_shape_orig = x.shape
-    x_2d = x.reshape(-1, x_shape_orig[-1])
-    
-    M, K = x_2d.shape
-    N = weight.shape[0]
+    x_2d = x.reshape(-1, x_shape_orig[-1]) if x_q is None else None
 
     # 2. Kernel 1: Dynamic Activation Quantization
     #    (This is much faster than Python-loop based axiswise quant)
-    x_int8, x_scale = triton_quantize_rowwise(x_2d)
+    if x_q is None:
+        x_int8, x_scale = triton_quantize_rowwise(x_2d)
+    else:
+        x_int8, x_scale = x_q
+    M, K = x_int8.shape
+    N = weight.shape[0]
 
     # 3. Allocate Output
     output = torch.empty((M, N), device=x.device, dtype=compute_dtype)
@@ -205,7 +215,7 @@ def triton_int8_linear(x: torch.Tensor, weight: torch.Tensor, weight_scale, bias
     
     # Check if we have bias
     has_bias = bias is not None
-    bias_ptr = bias if has_bias else x # Dummy pointer if None
+    bias_ptr = bias if has_bias else x_int8 # Dummy pointer if None
     
     # NOTE: PyTorch Linear weights are [Out, In] (N, K). 
     # The kernel expects B to be [K, N] logically. 
@@ -239,14 +249,7 @@ def triton_int8_linear(x: torch.Tensor, weight: torch.Tensor, weight_scale, bias
 # =============================================================================
 
 @triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),
-        triton.Config({'BLOCK_M': 64,  'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64,  'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64,  'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32,  'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),
-    ],
+    configs=_AUTOTUNE_CONFIGS,
     key=['M', 'N', 'K'],
 )
 @triton.jit
@@ -326,20 +329,23 @@ def _int8_matmul_dequant_per_row_kernel(
 # Python Wrapper (Per-Row Weight Scales)
 # =============================================================================
 
-def triton_int8_linear_per_row(x: torch.Tensor, weight: torch.Tensor, weight_scale: torch.Tensor, bias=None, compute_dtype=torch.float16):
+def triton_int8_linear_per_row(x: torch.Tensor, weight: torch.Tensor, weight_scale: torch.Tensor, bias=None, compute_dtype=torch.float16,
+                               x_q=None):
     """
     Fused pipeline for W8A8 Linear Layer with per-row weight quantization.
     weight_scale: [N, 1] per-row scales
+    x_q: optional (x_int8 [M, K], x_scale [M, 1]) already-quantized activation.
     """
     # 1. Flatten inputs if 3D
     x_shape_orig = x.shape
-    x_2d = x.reshape(-1, x_shape_orig[-1])
-
-    M, K = x_2d.shape
-    N = weight.shape[0]
 
     # 2. Dynamic Activation Quantization
-    x_int8, x_scale = triton_quantize_rowwise(x_2d.float())
+    if x_q is None:
+        x_int8, x_scale = triton_quantize_rowwise(x.reshape(-1, x_shape_orig[-1]).float())
+    else:
+        x_int8, x_scale = x_q
+    M, K = x_int8.shape
+    N = weight.shape[0]
 
     # 3. Allocate Output
     output = torch.empty((M, N), device=x.device, dtype=compute_dtype)
@@ -351,7 +357,7 @@ def triton_int8_linear_per_row(x: torch.Tensor, weight: torch.Tensor, weight_sca
     grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']), )
 
     has_bias = bias is not None
-    bias_ptr = bias if has_bias else x  # Dummy pointer if None
+    bias_ptr = bias if has_bias else x_int8  # Dummy pointer if None
 
     _int8_matmul_dequant_per_row_kernel[grid](
         a_ptr=x_int8,
@@ -369,3 +375,66 @@ def triton_int8_linear_per_row(x: torch.Tensor, weight: torch.Tensor, weight_sca
 
     # 6. Reshape output
     return output.reshape(x_shape_orig[:-1] + (N,))
+
+
+# =============================================================================
+# Kernel 4: SiTU input activation (MOSS-Image), single pass
+# =============================================================================
+# situ on [hidden | gate] halves:
+#     4 * tanh(gate / 4) * sigmoid(gate) * 25 * tanh(hidden / 25)
+# Mirrors comfy-kitchen's `input_act="situ"` (PR #251) without needing its CUDA
+# kernel: reads the 2K-wide row once, writes the K-wide activated row once,
+# all math in fp32 (the eager chain is ~8 elementwise passes with temporaries).
+
+@triton.jit
+def _stable_tanh(x):
+    # tanh without libdevice: (1 - e^-2|x|) / (1 + e^-2|x|) saturates cleanly and never
+    # overflows, but cancels near 0, so use the odd Taylor series there (error < 1e-11 at 0.02).
+    ax = tl.abs(x)
+    t = tl.exp(-2.0 * ax)
+    big = (1.0 - t) / (1.0 + t)
+    big = tl.where(x < 0, -big, big)
+    x2 = x * x
+    small = x * (1.0 - x2 * (1.0 / 3.0 - x2 * (2.0 / 15.0)))
+    return tl.where(ax < 0.02, small, big)
+
+
+@triton.jit
+def _situ_kernel(
+    x_ptr, y_ptr,
+    K,
+    stride_xm, stride_ym,
+    BLOCK: tl.constexpr,
+):
+    row = tl.program_id(0).to(tl.int64)
+    cols = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
+    mask = cols < K
+
+    x_row = x_ptr + row * stride_xm
+    hidden = tl.load(x_row + cols, mask=mask, other=0.0).to(tl.float32)
+    gate = tl.load(x_row + K + cols, mask=mask, other=0.0).to(tl.float32)
+
+    gate_cap = 4.0 * _stable_tanh(gate / 4.0)
+    hidden_cap = 25.0 * _stable_tanh(hidden / 25.0)
+    out = gate_cap / (1.0 + tl.exp(-gate)) * hidden_cap
+
+    tl.store(y_ptr + row * stride_ym + cols, out.to(y_ptr.dtype.element_ty), mask=mask)
+
+
+def triton_situ(x: torch.Tensor) -> torch.Tensor:
+    """[..., 2K] ([hidden | gate]) -> [..., K], in x.dtype."""
+    k2 = x.shape[-1]
+    if k2 % 2:
+        raise ValueError(f"situ expects an even last dim ([hidden | gate]), got {k2}")
+    K = k2 // 2
+    x_2d = x.reshape(-1, k2)
+    if x_2d.stride(1) != 1:
+        x_2d = x_2d.contiguous()
+    M = x_2d.shape[0]
+    y = torch.empty((M, K), device=x.device, dtype=x.dtype)
+    if M and K:
+        BLOCK = 1024
+        _situ_kernel[(M, triton.cdiv(K, BLOCK))](
+            x_2d, y, K, x_2d.stride(0), y.stride(0), BLOCK=BLOCK,
+        )
+    return y.reshape(x.shape[:-1] + (K,))
